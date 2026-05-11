@@ -489,9 +489,9 @@ export class Input implements Component, Focusable {
 		// Hardware cursor marker (zero-width, emitted before fake cursor for IME positioning)
 		const marker = this.focused ? CURSOR_MARKER : "";
 
-		// Use inverse video to show cursor
-		const cursorChar = `\x1b[7m${atCursor}\x1b[27m`; // ESC[7m = reverse video, ESC[27m = normal
-		const textWithCursor = beforeCursor + marker + cursorChar + afterCursor;
+		// Use inverse video to show cursor only while focused
+		const cursorChar = this.focused ? `\x1b[7m${atCursor}\x1b[27m` : atCursor; // ESC[7m = reverse video, ESC[27m = normal
+		const textWithCursor = this.focused ? beforeCursor + marker + cursorChar + afterCursor : visibleText;
 
 		// Calculate visual width
 		const visualLength = visibleWidth(textWithCursor);

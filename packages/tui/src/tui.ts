@@ -12,6 +12,10 @@ import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } fro
 import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.js";
 
 const KITTY_SEQUENCE_PREFIX = "\x1b_G";
+const FOCUS_REPORTING_ENABLE = "\x1b[?1004h";
+const FOCUS_REPORTING_DISABLE = "\x1b[?1004l";
+const FOCUS_IN = "\x1b[I";
+const FOCUS_OUT = "\x1b[O";
 
 function extractKittyImageIds(line: string): number[] {
 	const sequenceStart = line.indexOf(KITTY_SEQUENCE_PREFIX);
@@ -243,6 +247,7 @@ export class TUI extends Container {
 	private previousWidth = 0;
 	private previousHeight = 0;
 	private focusedComponent: Component | null = null;
+	private terminalFocused = true;
 	private inputListeners = new Set<InputListener>();
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
@@ -316,9 +321,9 @@ export class TUI extends Container {
 
 		this.focusedComponent = component;
 
-		// Set focused flag on new component
+		// Set focused flag on new component only while the terminal/pane is focused.
 		if (isFocusable(component)) {
-			component.focused = true;
+			component.focused = this.terminalFocused;
 		}
 	}
 
@@ -444,6 +449,9 @@ export class TUI extends Container {
 			(data) => this.handleInput(data),
 			() => this.requestRender(),
 		);
+		// Request terminal focus-in/focus-out events (CSI I / CSI O). Multiplexers such as tmux
+		// forward these when configured with focus-events enabled.
+		this.terminal.write(FOCUS_REPORTING_ENABLE);
 		this.terminal.hideCursor();
 		this.queryCellSize();
 		this.requestRender();
@@ -488,6 +496,7 @@ export class TUI extends Container {
 			this.terminal.write("\r\n");
 		}
 
+		this.terminal.write(FOCUS_REPORTING_DISABLE);
 		this.terminal.showCursor();
 		this.terminal.stop();
 	}
@@ -542,6 +551,10 @@ export class TUI extends Container {
 	}
 
 	private handleInput(data: string): void {
+		if (this.handleFocusEvent(data)) {
+			return;
+		}
+
 		if (this.inputListeners.size > 0) {
 			let current = data;
 			for (const listener of this.inputListeners) {
@@ -594,6 +607,22 @@ export class TUI extends Container {
 			this.focusedComponent.handleInput(data);
 			this.requestRender();
 		}
+	}
+
+	private handleFocusEvent(data: string): boolean {
+		if (data !== FOCUS_IN && data !== FOCUS_OUT) {
+			return false;
+		}
+
+		this.terminalFocused = data === FOCUS_IN;
+		if (isFocusable(this.focusedComponent)) {
+			this.focusedComponent.focused = this.terminalFocused;
+		}
+		if (!this.terminalFocused) {
+			this.terminal.hideCursor();
+		}
+		this.requestRender();
+		return true;
 	}
 
 	private consumeCellSizeResponse(data: string): boolean {
@@ -1310,7 +1339,7 @@ export class TUI extends Container {
 		}
 
 		this.hardwareCursorRow = targetRow;
-		if (this.showHardwareCursor) {
+		if (this.showHardwareCursor && this.terminalFocused) {
 			this.terminal.showCursor();
 		} else {
 			this.terminal.hideCursor();

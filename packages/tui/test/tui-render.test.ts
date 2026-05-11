@@ -2,7 +2,7 @@ import assert from "node:assert";
 import { describe, it } from "node:test";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import { deleteKittyImage, encodeKitty } from "../src/terminal-image.js";
-import { type Component, TUI } from "../src/tui.js";
+import { type Component, type Focusable, TUI } from "../src/tui.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
 
 class TestComponent implements Component {
@@ -10,6 +10,21 @@ class TestComponent implements Component {
 	render(_width: number): string[] {
 		return this.lines;
 	}
+	invalidate(): void {}
+}
+
+class FocusableTestComponent implements Component, Focusable {
+	focused = false;
+	inputs: string[] = [];
+
+	render(_width: number): string[] {
+		return [this.focused ? "focused" : "unfocused"];
+	}
+
+	handleInput(data: string): void {
+		this.inputs.push(data);
+	}
+
 	invalidate(): void {}
 }
 
@@ -140,6 +155,62 @@ describe("TUI Kitty image cleanup", () => {
 		assert.ok(deleteIndex >= 0, "previous image should be deleted during full redraw");
 		assert.ok(clearIndex >= 0, "full redraw should clear the screen");
 		assert.ok(deleteIndex < clearIndex, "old image should be deleted before the screen is cleared");
+
+		tui.stop();
+	});
+});
+
+describe("TUI focus reporting", () => {
+	it("toggles focusable components on terminal focus events", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const component = new FocusableTestComponent();
+		tui.addChild(component);
+		tui.setFocus(component);
+
+		tui.start();
+		await terminal.waitForRender();
+		assert.strictEqual(component.focused, true);
+		assert.ok(terminal.getWrites().includes("\x1b[?1004h"), "focus reporting should be enabled on start");
+
+		terminal.sendInput("\x1b[O");
+		await terminal.waitForRender();
+		assert.strictEqual(component.focused, false);
+		assert.deepStrictEqual(component.inputs, [], "focus event should not reach the focused component");
+
+		terminal.sendInput("a");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(component.inputs, ["a"], "regular input should still reach the focused component");
+
+		terminal.sendInput("\x1b[I");
+		await terminal.waitForRender();
+		assert.strictEqual(component.focused, true);
+
+		tui.stop();
+		assert.ok(terminal.getWrites().includes("\x1b[?1004l"), "focus reporting should be disabled on stop");
+	});
+
+	it("keeps newly focused components visually unfocused while the terminal is unfocused", async () => {
+		const terminal = new VirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const first = new FocusableTestComponent();
+		const second = new FocusableTestComponent();
+		tui.addChild(first);
+		tui.addChild(second);
+		tui.setFocus(first);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[O");
+		await terminal.waitForRender();
+		tui.setFocus(second);
+
+		assert.strictEqual(first.focused, false);
+		assert.strictEqual(second.focused, false);
+
+		terminal.sendInput("\x1b[I");
+		await terminal.waitForRender();
+		assert.strictEqual(second.focused, true);
 
 		tui.stop();
 	});
